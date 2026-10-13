@@ -1,0 +1,218 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String            @id @default(uuid())
+  email           String            @unique
+  name            String?
+  passwordHash    String?
+  role            String            @default("user")
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  documents       Document[]
+  chunks          DocumentChunk[]
+  notes           Note[]
+  memories        Memory[]
+  conversations   Conversation[]
+  privacySettings PrivacySetting?
+  auditEvents     AuditEvent[]
+  processingJobs  ProcessingJob[]
+}
+
+model Document {
+  id              String            @id @default(uuid())
+  userId          String
+  title           String
+  fileName        String
+  fileType        String            // pdf, docx, txt, md
+  fileSize        Int
+  filePath        String
+  mimeType        String
+  status          String            @default("UPLOADED") // UPLOADED, EXTRACTING, CHUNKING, INDEXING, COMPLETED, FAILED
+  errorMessage    String?
+  rawText         String?
+  pageCount       Int               @default(1)
+  metadataJson    String?           // JSON formatted metadata
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chunks          DocumentChunk[]
+  processingJobs  ProcessingJob[]
+  memorySources   MemorySource[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model DocumentChunk {
+  id              String            @id @default(uuid())
+  documentId      String
+  userId          String
+  chunkIndex      Int
+  pageNumber      Int?
+  content         String
+  tokenCount      Int?
+  embeddingJson   String?           // JSON array of floats for cosine similarity
+  createdAt       DateTime          @default(now())
+
+  document        Document          @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  memorySources   MemorySource[]
+
+  @@index([documentId])
+  @@index([userId])
+}
+
+model Note {
+  id              String            @id @default(uuid())
+  userId          String
+  title           String
+  content         String
+  category        String            @default("General")
+  tagsJson        String            @default("[]")
+  isIndexed       Boolean           @default(true)
+  retentionPolicy String            @default("indefinite")
+  embeddingJson   String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  memorySources   MemorySource[]
+
+  @@index([userId])
+  @@index([category])
+}
+
+model Memory {
+  id              String            @id @default(uuid())
+  userId          String
+  content         String
+  category        String            @default("fact") // preference, fact, personal, goal, instruction, context
+  isPersistent    Boolean           @default(true)
+  retentionPolicy String            @default("indefinite")
+  confidence      Float             @default(1.0)
+  sourceSummary   String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sources         MemorySource[]
+
+  @@index([userId])
+  @@index([category])
+  @@index([isPersistent])
+}
+
+model MemorySource {
+  id              String            @id @default(uuid())
+  memoryId        String
+  documentId      String?
+  chunkId         String?
+  noteId          String?
+  conversationId  String?
+  excerpt         String?
+  createdAt       DateTime          @default(now())
+
+  memory          Memory            @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+  document        Document?         @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  chunk           DocumentChunk?    @relation(fields: [chunkId], references: [id], onDelete: SetNull)
+  note            Note?             @relation(fields: [noteId], references: [id], onDelete: SetNull)
+  conversation    Conversation?     @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([memoryId])
+}
+
+model Conversation {
+  id              String            @id @default(uuid())
+  userId          String
+  title           String
+  scopeType       String            @default("all") // all, selected_docs, category
+  scopeConfigJson String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages        ConversationMessage[]
+  memorySources   MemorySource[]
+
+  @@index([userId])
+}
+
+model ConversationMessage {
+  id                  String        @id @default(uuid())
+  conversationId      String
+  role                String        // user, assistant, system
+  content             String
+  sourcesJson         String?       // JSON array of citation objects
+  evidenceQuality     String?       // HIGH, MODERATE, INSUFFICIENT
+  insufficientEvidence Boolean      @default(false)
+  retrievalMode       String?       // VECTOR, KEYWORD_FALLBACK
+  externalProviderUsed String?      // lyzr-studio, local-deterministic
+  createdAt           DateTime      @default(now())
+
+  conversation        Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+}
+
+model ProcessingJob {
+  id              String            @id @default(uuid())
+  userId          String
+  documentId      String?
+  jobType         String            @default("INGEST_DOCUMENT") // INGEST_DOCUMENT, REINDEX_NOTE, BULK_DELETE
+  status          String            @default("QUEUED") // QUEUED, PROCESSING, COMPLETED, FAILED
+  stage           String            @default("UPLOADED") // UPLOADED, EXTRACTING, CHUNKING, INDEXING, COMPLETED, FAILED
+  progressPercent Int               @default(0)
+  errorMessage    String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime          @default(now())
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  document        Document?         @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([documentId])
+  @@index([status])
+}
+
+model PrivacySetting {
+  id                        String   @id @default(uuid())
+  userId                    String   @unique
+  persistentMemoryEnabled   Boolean  @default(true)
+  defaultRetentionDays      Int      @default(0) // 0 = indefinite
+  allowExternalAiProcessing Boolean  @default(true)
+  preferredAiProvider       String   @default("lyzr-studio")
+  lyzrAgentId               String?  @default("6ace474e031adebb0bc93b2a")
+  lyzrApiKeyConfigured      Boolean  @default(true)
+  shareAnonymizedTelemetry  Boolean  @default(false)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  user                      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AuditEvent {
+  id              String            @id @default(uuid())
+  userId          String
+  action          String            // DOCUMENT_UPLOAD, DOCUMENT_DELETE, NOTE_CREATE, etc.
+  resourceType    String            // document, note, memory, conversation, settings
+  resourceId      String?
+  detailsJson     String?           // sanitized metadata only
+  ipAddress       String?
+  createdAt       DateTime          @default(now())
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
